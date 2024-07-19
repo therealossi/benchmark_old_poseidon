@@ -1,0 +1,79 @@
+#include <iostream>
+#include <chrono>
+#include <random>
+#include <filesystem>
+#include "bufferpool.hpp"
+
+using namespace std;
+using namespace std::chrono;
+
+void create_dir(const std::string& path) {
+    std::filesystem::path path_obj(path);
+    // check if path exists and is of a regular file
+    if (! std::filesystem::exists(path_obj))
+        std::filesystem::create_directory(path_obj);
+}
+
+
+// Function to simulate database operations
+void simulateDatabaseOperations(bufferpool& bp, int operations) {
+    // Random number generator for page ids and operations
+    random_device rd;
+    mt19937 gen(rd());
+    uniform_int_distribution<> dis(1, 1000); // Assuming 1000 different pages for simplicity
+
+    int hits = 0;
+    for (int i = 0; i < operations; i++) {
+        auto page_id = dis(gen); // Generate a random page id
+        try {
+            // Fetch page and simulate a read or write operation
+            auto* pg = bp.fetch_page(page_id);
+            if (dis(gen) % 2 == 0) { // Simulate updates 50% of the time
+                bp.mark_dirty(page_id);
+                memset(pg->payload, 0, PF_PAGE_SIZE); // Simulate modifying the page
+            }
+            hits++;
+        } catch (const exception& e) {
+            cerr << "Error during page fetch: " << e.what() << endl;
+        }
+    }
+    cout << "Operations: " << operations << ", Hits: " << hits << ", Hit ratio: " << bp.hit_ratio() << endl;
+}
+
+int main() {
+    create_dir("benchdir");
+    auto bench_file = std::make_shared<paged_file>();
+    bench_file->open("benchdir/benches.db", 0);
+
+    // Create a bufferpool with a specified size
+    const size_t BUFFER_SIZE = 500; // Adjust based on system capabilities
+    bufferpool bp(BUFFER_SIZE);
+    bp.register_file(0, bench_file);
+    
+    for (auto i = 0u; i < 1000; i++)
+        bp.allocate_page(0ul);
+
+    for (auto i = 1u; i <= 1000; i++) {
+        auto p = bp.fetch_page(i);
+        p->payload[0] = i+1;
+        bp.mark_dirty(i);
+    }
+    bp.flush_all();
+
+    // Time the operations
+    auto start = high_resolution_clock::now();
+
+    // Simulate database operations
+    simulateDatabaseOperations(bp, 10000); // 10,000 random read/write operations
+
+    // End timing
+    auto stop = high_resolution_clock::now();
+    auto duration = duration_cast<milliseconds>(stop - start);
+    cout << "Elapsed time: " << duration.count() << " ms" << endl;
+
+    // Optional: Flush all pages back to disk
+    bp.flush_all();
+
+    return 0;
+}
+
